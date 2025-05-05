@@ -127,7 +127,30 @@ st.header("Simulation Results")
 run_simulation = st.sidebar.button("Run Simulation")
 
 if run_simulation and config:
-    try:
+
+
+        # Instantiate calculator
+        calc = LLMCalculator(
+            num_layers=config["num_layers"],
+            hidden_size=config["hidden_size"],
+            num_attention_heads=config["num_attention_heads"],
+            mlp_hidden_dim=config["mlp_hidden_dim"],
+            vocab_size=config["vocab_size"],
+            precision=config["precision"]
+        )
+
+        # Get full details
+        details = calc.get_full_details(batch_size, sequence_length, num_tokens_to_generate)
+        summary = details["summary"]
+
+        # Display results (using tabs as designed)
+        # Add tabs for the new visualization
+        tab_summary, tab_params, tab_prefill, tab_decode, tab_viz, tab_arch, tab_model_viz = st.tabs([
+            "📊 Summary", "⚙️ Model Parameters", "➡️ Prefill Stage", "🔄 Decode Stage", 
+            "📈 Visualizations", "🏛️ Model Structure", "🖼️ Model Visualization"
+        ])
+        
+        try:
         # Your existing calculation code remains...
         
         # Add the following section for the new visualization tab
@@ -166,27 +189,6 @@ if run_simulation and config:
                 
                 The visualizations are simplified representations and do not show all computational details.
                 """)
-
-        # Instantiate calculator
-        calc = LLMCalculator(
-            num_layers=config["num_layers"],
-            hidden_size=config["hidden_size"],
-            num_attention_heads=config["num_attention_heads"],
-            mlp_hidden_dim=config["mlp_hidden_dim"],
-            vocab_size=config["vocab_size"],
-            precision=config["precision"]
-        )
-
-        # Get full details
-        details = calc.get_full_details(batch_size, sequence_length, num_tokens_to_generate)
-        summary = details["summary"]
-
-        # Display results (using tabs as designed)
-        # Add tabs for the new visualization
-        tab_summary, tab_params, tab_prefill, tab_decode, tab_viz, tab_arch, tab_model_viz = st.tabs([
-            "📊 Summary", "⚙️ Model Parameters", "➡️ Prefill Stage", "🔄 Decode Stage", 
-            "📈 Visualizations", "🏛️ Model Structure", "🖼️ Model Visualization"
-        ])
 
         with tab_summary:
             st.subheader(f"Input Configuration ({model_name})")
@@ -363,6 +365,42 @@ if run_simulation and config:
             *   **Prefill:** Processes the entire input prompt (`sequence_length`) in parallel to generate the initial KV cache. Compute-intensive.
             *   **Decode:** Generates output tokens one by one, using the KV cache from previous steps. Memory-bandwidth intensive.
             """)
+        
+        with tab_model_viz:
+            st.subheader("Model Architecture Visualization")
+            
+            # Create visualizations using the helper function
+            visualizations = create_model_visualizations(config)
+            
+            # Display the visualizations
+            st.subheader("Full Model Structure")
+            st.plotly_chart(visualizations["full_model"], use_container_width=True)
+            
+            # Create a layer selector
+            selected_layer = st.slider("Select Layer for Detailed View", 
+                                       min_value=1, 
+                                       max_value=config["num_layers"], 
+                                       value=1)
+            
+            # Show layer details for the selected layer
+            visualizer = ModelVisualizer(config)
+            st.plotly_chart(visualizer.visualize_layer_details(selected_layer-1), 
+                            use_container_width=True)
+            
+            # Show the attention mechanism
+            st.subheader("Multi-Head Attention Visualization")
+            st.plotly_chart(visualizations["attention"], use_container_width=True)
+            
+            # Add expander with explanation
+            with st.expander("About the Visualizations"):
+                st.markdown("""
+                These visualizations represent:
+                1. **Full Model Structure**: Shows all layers in the model from input to output.
+                2. **Layer Detail**: Displays the components within a transformer layer, including the attention mechanism and feed-forward network.
+                3. **Multi-Head Attention**: Illustrates how the attention mechanism works with multiple heads in parallel.
+                
+                The visualizations are simplified representations and do not show all computational details.
+                """)
 
     except Exception as e:
         st.error(f"An error occurred during calculation: {e}")
