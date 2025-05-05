@@ -10,6 +10,8 @@ from llm_calc import LLMCalculator, format_num, format_bytes
 import io
 # Import the visualization module
 from model_viz import ModelVisualizer, create_model_visualizations
+# Add this import at the top with your other imports
+from parallel_viz import ParallelizationVisualizer, create_parallelism_visualization
 
 # --- Page Config ---
 st.set_page_config(layout="wide", page_title="LLM Inference Simulator")
