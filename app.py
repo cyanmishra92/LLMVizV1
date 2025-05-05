@@ -124,7 +124,7 @@ num_tokens_to_generate = st.sidebar.slider("Tokens to Generate (N_gen)", min_val
 # --- Main Area Output ---
 st.header("Simulation Results")
 
-# Create tabs
+# Create tabs for the application
 tab_summary, tab_params, tab_prefill, tab_decode, tab_viz, tab_arch, tab_model_viz = st.tabs([
     "📊 Summary", "⚙️ Model Parameters", "➡️ Prefill Stage", "🔄 Decode Stage", 
     "📈 Visualizations", "🏛️ Model Structure", "🖼️ Model Visualization"
@@ -327,3 +327,63 @@ if run_simulation and config:
             })
             fig_dec_flops = px.line(decode_flops_df, x='Generated Tokens', y='Cumulative Decode TFLOPs', title='Cumulative Decode FLOPs During Generation', markers=True)
             st.plotly_chart(fig_dec_flops, use_container_width=True)
+
+        with tab_arch:
+            st.subheader("Assumed Model Structure (Decoder-Only Transformer)")
+            st.markdown("""
+            This simulator assumes a standard decoder-only transformer architecture, common in models like GPT, Llama, etc.
+            The key components and data flow are:
+
+            1.  **Input Embedding:** Input tokens (prompt) are converted into vectors of `hidden_size` (H).
+                *   Params: `vocab_size` (V) * `hidden_size` (H)
+
+            2.  **Transformer Blocks (repeated L times):**
+                *   **Layer Normalization:** Applied before attention and MLP layers (Pre-LN assumed).
+                *   **Multi-Head Self-Attention (MHA):**
+                    *   Input projected into Query (Q), Key (K), Value (V) matrices (`num_heads` times).
+                        *   Params (QKV Proj): 3 * H * H
+                    *   Attention scores calculated: `softmax(Q @ K.T / sqrt(head_dim)) @ V`.
+                        *   FLOPs (Prefill): ~ 4 * B * S^2 * H
+                        *   FLOPs (Decode): ~ 4 * B * S_total * H (per token)
+                    *   Output projection combines head outputs back to `hidden_size`.
+                        *   Params (Output Proj): H * H
+                *   **Residual Connection:** Output of attention added to its input.
+                *   **Layer Normalization:** Applied before the MLP layer.
+                *   **Feed-Forward Network (MLP):** Typically a 2 or 3-layer network (SwiGLU assumed here).
+                    *   Expands `hidden_size` to `mlp_hidden_dim` (M) and contracts back.
+                    *   Params (SwiGLU): 3 * H * M (Gate, Up, Down projections)
+                    *   FLOPs (Prefill): ~ 6 * B * S * H * M
+                    *   FLOPs (Decode): ~ 6 * B * H * M (per token)
+                *   **Residual Connection:** Output of MLP added to its input.
+
+            3.  **Final Layer Normalization:** Applied after the last transformer block.
+
+            4.  **Output Layer (Unembedding / LM Head):** Projects the final hidden state to `vocab_size` to get logits for the next token.
+                *   Params: H * V
+
+            **Key Inference Stages:**
+            *   **Prefill:** Processes the entire input prompt (`sequence_length`) in parallel to generate the initial KV cache. Compute-intensive.
+            *   **Decode:** Generates output tokens one by one, using the KV cache from previous steps. Memory-bandwidth intensive.
+            """)
+        
+        # Model Visualization Tab content is already provided above
+
+    except Exception as e:
+        st.error(f"An error occurred during calculation: {e}")
+        st.exception(e) # Show traceback for debugging
+
+elif run_simulation and not config:
+    st.warning("Please configure model parameters manually or upload a config file before running the simulation.")
+
+else:
+    st.info("Adjust parameters in the sidebar and click 'Run Simulation'.")
+
+# Add footer
+st.markdown("---")
+st.markdown("""
+### About
+This LLM Inference Simulator helps estimate computational resources required for running large language models.
+Built with Streamlit, it provides interactive visualization of model architecture and resource requirements.
+
+For more information, check out the [GitHub repository](https://github.com/yourusername/llm-inference-simulator).
+""")
