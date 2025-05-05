@@ -150,7 +150,7 @@ if run_simulation and config:
             "📈 Visualizations", "🏛️ Model Structure", "🖼️ Model Visualization"
         ])
         
-        try:
+    try:
         # Your existing calculation code remains...
         
         # Add the following section for the new visualization tab
