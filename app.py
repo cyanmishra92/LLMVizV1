@@ -8,10 +8,31 @@ import plotly.express as px
 # Import the core calculation logic
 from llm_calc import LLMCalculator, format_num, format_bytes
 import io
-# Import the visualization module
+# Import the visualization modules
 from model_viz import ModelVisualizer, create_model_visualizations
-# Add this import at the top with your other imports
 from parallel_viz import ParallelizationVisualizer, create_parallelism_visualization
+
+# --- Initialize Session State ---
+# This ensures that state persists between reruns when widgets change
+if 'parallelism_type' not in st.session_state:
+    st.session_state['parallelism_type'] = "batch"
+if 'selected_layer' not in st.session_state:
+    st.session_state['selected_layer'] = 1
+if 'simulation_ran' not in st.session_state:
+    st.session_state['simulation_ran'] = False
+if 'simulation_results' not in st.session_state:
+    st.session_state['simulation_results'] = None
+if 'config' not in st.session_state:
+    st.session_state['config'] = None
+if 'params' not in st.session_state:
+    st.session_state['params'] = {
+        "batch": {"num_devices": 4, "batch_size": 16},
+        "data": {"num_devices": 4, "batch_size": 16},
+        "tensor": {"num_devices": 4},
+        "pipeline": {"num_devices": 4, "pipeline_chunks": 4},
+        "zero": {"num_devices": 4},
+        "hybrid": {"num_pipeline_stages": 2, "num_tensor_parallel": 2, "num_data_parallel": 2}
+    }
 
 # --- Page Config ---
 st.set_page_config(layout="wide", page_title="LLM Inference Simulator")
@@ -39,6 +60,362 @@ def display_flops_breakdown(title, data):
         if "output_lm_head_flops" in data:
              st.markdown(f"  - `Output LM Head`: {format_num(data['output_lm_head_flops'])} FLOPs (`{data['formulas']['output_lm_head']}`)")
         st.markdown(f"**Total FLOPs:** {format_num(data['total_flops'])} (`{data['formulas']['total']}`)")
+
+# --- Callback functions for session state ---
+def update_parallelism_type():
+    # Just store the new value from the widget
+    st.session_state.parallelism_type = st.session_state.parallelism_widget
+
+def update_selected_layer():
+    # Just store the new value from the widget
+    st.session_state.selected_layer = st.session_state.layer_slider
+
+def update_param(param_name, param_type):
+    # Store parameter values in the nested dictionary
+    if param_type not in st.session_state.params:
+        st.session_state.params[param_type] = {}
+    st.session_state.params[param_type][param_name] = st.session_state[f"{param_type}_{param_name}"]
+
+# --- Model Visualization Tab content ---
+def show_model_viz_tab():
+    st.subheader("Model Architecture Visualization")
+    
+    if not st.session_state.simulation_ran or not st.session_state.config:
+        st.warning("Please run a simulation first")
+        return
+    
+    # Create visualizations
+    visualizations = create_model_visualizations(st.session_state.config)
+    
+    # Display the visualizations
+    st.subheader("Full Model Structure")
+    st.plotly_chart(visualizations["full_model"], use_container_width=True)
+    
+    # Create a layer selector that preserves state
+    max_layers = st.session_state.config["num_layers"]
+    
+    # Use session state key for the slider
+    st.slider(
+        "Select Layer for Detailed View", 
+        min_value=1, 
+        max_value=max_layers, 
+        value=st.session_state.selected_layer,
+        key="layer_slider",
+        on_change=update_selected_layer
+    )
+    
+    # Show layer details for the selected layer
+    visualizer = ModelVisualizer(st.session_state.config)
+    st.plotly_chart(visualizer.visualize_layer_details(st.session_state.selected_layer-1), 
+                    use_container_width=True)
+    
+    # Show the attention mechanism
+    st.subheader("Multi-Head Attention Visualization")
+    st.plotly_chart(visualizations["attention"], use_container_width=True)
+    
+    # Add expander with explanation
+    with st.expander("About the Visualizations"):
+        st.markdown("""
+        These visualizations represent:
+        1. **Full Model Structure**: Shows all layers in the model from input to output.
+        2. **Layer Detail**: Displays the components within a transformer layer, including the attention mechanism and feed-forward network.
+        3. **Multi-Head Attention**: Illustrates how the attention mechanism works with multiple heads in parallel.
+        
+        The visualizations are simplified representations and do not show all computational details.
+        """)
+
+# --- Parallelization Tab content ---
+def show_parallel_viz_tab():
+    st.subheader("LLM Parallelization Strategies")
+    
+    if not st.session_state.simulation_ran or not st.session_state.config:
+        st.warning("Please run a simulation first")
+        return
+    
+    st.markdown("""
+    This tab visualizes different parallelization strategies used for LLM inference and training.
+    Each strategy has different tradeoffs in terms of memory usage, computation, and communication overhead.
+    """)
+    
+    # Add a selector for parallelism type with session state persistence
+    st.selectbox(
+        "Select Parallelization Strategy",
+        ["batch", "data", "tensor", "pipeline", "zero", "hybrid"],
+        index=["batch", "data", "tensor", "pipeline", "zero", "hybrid"].index(st.session_state.parallelism_type),
+        key="parallelism_widget",
+        on_change=update_parallelism_type,
+        format_func=lambda x: {
+            "batch": "Batch Parallelism", 
+            "data": "Data Parallelism",
+            "tensor": "Tensor Parallelism",
+            "pipeline": "Pipeline Parallelism",
+            "zero": "ZeRO (Zero Redundancy Optimizer)",
+            "hybrid": "Hybrid Parallelism"
+        }[x]
+    )
+    
+    # Add parameter controls based on selected parallelism
+    col1, col2 = st.columns(2)
+    
+    params = {}
+    current_type = st.session_state.parallelism_type
+    
+    if current_type == "batch":
+        params["num_devices"] = col1.slider(
+            "Number of Devices", 
+            min_value=2, max_value=8, 
+            value=st.session_state.params["batch"].get("num_devices", 4),
+            key="batch_num_devices",
+            on_change=update_param,
+            args=("num_devices", "batch")
+        )
+        params["batch_size"] = col2.slider(
+            "Total Batch Size", 
+            min_value=4, max_value=64, 
+            value=st.session_state.params["batch"].get("batch_size", 16), 
+            step=4,
+            key="batch_batch_size",
+            on_change=update_param,
+            args=("batch_size", "batch")
+        )
+    
+    elif current_type == "data":
+        params["num_devices"] = col1.slider(
+            "Number of Devices", 
+            min_value=2, max_value=8, 
+            value=st.session_state.params["data"].get("num_devices", 4),
+            key="data_num_devices",
+            on_change=update_param,
+            args=("num_devices", "data")
+        )
+        params["batch_size"] = col2.slider(
+            "Total Batch Size", 
+            min_value=4, max_value=64, 
+            value=st.session_state.params["data"].get("batch_size", 16), 
+            step=4,
+            key="data_batch_size",
+            on_change=update_param,
+            args=("batch_size", "data")
+        )
+    
+    elif current_type == "tensor":
+        params["num_devices"] = col1.slider(
+            "Number of Devices", 
+            min_value=2, max_value=8, 
+            value=st.session_state.params["tensor"].get("num_devices", 4),
+            key="tensor_num_devices",
+            on_change=update_param,
+            args=("num_devices", "tensor")
+        )
+    
+    elif current_type == "pipeline":
+        params["num_devices"] = col1.slider(
+            "Number of Pipeline Stages", 
+            min_value=2, max_value=8, 
+            value=st.session_state.params["pipeline"].get("num_devices", 4),
+            key="pipeline_num_devices",
+            on_change=update_param,
+            args=("num_devices", "pipeline")
+        )
+        params["pipeline_chunks"] = col2.slider(
+            "Number of Microbatches", 
+            min_value=1, max_value=8, 
+            value=st.session_state.params["pipeline"].get("pipeline_chunks", 4),
+            key="pipeline_pipeline_chunks",
+            on_change=update_param,
+            args=("pipeline_chunks", "pipeline")
+        )
+    
+    elif current_type == "zero":
+        params["num_devices"] = col1.slider(
+            "Number of Devices", 
+            min_value=2, max_value=8, 
+            value=st.session_state.params["zero"].get("num_devices", 4),
+            key="zero_num_devices",
+            on_change=update_param,
+            args=("num_devices", "zero")
+        )
+    
+    elif current_type == "hybrid":
+        params["num_pipeline_stages"] = col1.slider(
+            "Pipeline Stages", 
+            min_value=1, max_value=4, 
+            value=st.session_state.params["hybrid"].get("num_pipeline_stages", 2),
+            key="hybrid_num_pipeline_stages",
+            on_change=update_param,
+            args=("num_pipeline_stages", "hybrid")
+        )
+        params["num_tensor_parallel"] = col1.slider(
+            "Tensor Parallel Size", 
+            min_value=1, max_value=4, 
+            value=st.session_state.params["hybrid"].get("num_tensor_parallel", 2),
+            key="hybrid_num_tensor_parallel",
+            on_change=update_param,
+            args=("num_tensor_parallel", "hybrid")
+        )
+        params["num_data_parallel"] = col2.slider(
+            "Data Parallel Size", 
+            min_value=1, max_value=4, 
+            value=st.session_state.params["hybrid"].get("num_data_parallel", 2),
+            key="hybrid_num_data_parallel",
+            on_change=update_param,
+            args=("num_data_parallel", "hybrid")
+        )
+    
+    # Display visualization based on the selected type
+    fig = create_parallelism_visualization(st.session_state.config, current_type, **params)
+    st.plotly_chart(fig, use_container_width=True)
+    
+    # Add explanations for each parallelism type
+    with st.expander("About This Parallelization Strategy"):
+        if current_type == "batch":
+            st.markdown("""
+            **Batch Parallelism** is the simplest form of parallelism where a batch of inputs is divided among multiple devices.
+            
+            **How it works:**
+            - The input batch is split into smaller batches
+            - Each device processes its portion independently with a full copy of the model
+            - No communication is needed during processing
+            - Results are combined after processing
+            
+            **Benefits:**
+            - Simple to implement
+            - Linear scaling of throughput
+            - No communication overhead during computation
+            
+            **Limitations:**
+            - Each device needs a full copy of the model
+            - Memory requirements don't decrease
+            - Not suitable for models that don't fit on a single device
+            """)
+            
+        elif current_type == "data":
+            st.markdown("""
+            **Data Parallelism** is a common approach for training where the model is replicated across devices, but each processes different data.
+            
+            **How it works:**
+            - Full model copy exists on each device
+            - Each device processes different samples (forward pass)
+            - Gradients are synchronized across devices (backward pass)
+            - Parameter updates are synchronized
+            
+            **Benefits:**
+            - Simple to implement
+            - Good scaling for computation
+            - Works well when model fits on a single device
+            
+            **Limitations:**
+            - Does not reduce per-device memory requirements
+            - Communication overhead increases with model size
+            - Not suitable for models larger than single device memory
+            """)
+            
+        elif current_type == "tensor":
+            st.markdown("""
+            **Tensor Parallelism** (also known as horizontal parallelism) splits individual model operators across devices.
+            
+            **How it works:**
+            - Mathematical operations in the model are partitioned
+            - Common approach: Split attention heads across devices
+            - Each device computes a portion of each layer's operations
+            - Results are synchronized during computation
+            
+            **Benefits:**
+            - Reduces memory requirements per device
+            - Allows fitting larger models than single-device memory
+            - Balanced computation across devices
+            
+            **Limitations:**
+            - Requires significant communication during computation
+            - May introduce performance bottlenecks from communication
+            - More complex to implement
+            
+            *Common implementations: Megatron-LM, Mesh TensorFlow*
+            """)
+            
+        elif current_type == "pipeline":
+            st.markdown("""
+            **Pipeline Parallelism** splits the model across devices layer-wise, creating a processing pipeline.
+            
+            **How it works:**
+            - Model layers are divided among devices
+            - Input is processed sequentially through the pipeline
+            - Multiple inputs can be in different pipeline stages simultaneously
+            - Microbatches are used to increase pipeline efficiency
+            
+            **Benefits:**
+            - Reduces memory requirements per device
+            - Can scale to very large models
+            - Reduces activation memory requirements
+            
+            **Limitations:**
+            - Pipeline bubbles cause inefficiency
+            - Balancing computation across stages is challenging
+            - May introduce latency for individual requests
+            
+            *Common implementations: GPipe, PipeDream*
+            """)
+            
+        elif current_type == "zero":
+            st.markdown("""
+            **ZeRO (Zero Redundancy Optimizer)** shards optimizer states, gradients, and optionally parameters across devices.
+            
+            **How it works:**
+            - ZeRO Stage 1: Optimizer states are partitioned
+            - ZeRO Stage 2: Gradients are also partitioned
+            - ZeRO Stage 3: Parameters are also partitioned
+            - All-gather collectives bring necessary parameters to each device during computation
+            
+            **Benefits:**
+            - Linear reduction in memory requirements with number of devices
+            - Allows training models many times larger than single device memory
+            - Maintains computational efficiency of data parallelism
+            
+            **Limitations:**
+            - Increased communication volume
+            - Communication may become bottleneck
+            - Complex implementation
+            
+            *Implemented in: DeepSpeed, Megatron-DeepSpeed, PyTorch FSDP*
+            """)
+            
+        elif current_type == "hybrid":
+            st.markdown("""
+            **Hybrid Parallelism** combines multiple parallelism strategies for maximum scalability.
+            
+            **How it works:**
+            - Combines 2 or more parallelism strategies simultaneously
+            - Common combination: 3D Parallelism (Data + Pipeline + Tensor)
+            - Each strategy addresses different scaling challenges
+            
+            **Benefits:**
+            - Can scale to extremely large models (trillions of parameters)
+            - Better balance of computation vs. communication
+            - Adaptable to different hardware configurations
+            
+            **Limitations:**
+            - Very complex to implement and debug
+            - Requires careful tuning for optimal performance
+            - Requires sophisticated orchestration
+            
+            *Implemented in: Megatron-DeepSpeed, Microsoft's Turing-NLG/GPT, Google's PaLM architecture*
+            """)
+    
+    # Add additional resource links
+    with st.expander("Additional Resources"):
+        st.markdown("""
+        **Research Papers:**
+        - [Megatron-LM: Training Multi-Billion Parameter Language Models Using Model Parallelism](https://arxiv.org/abs/1909.08053)
+        - [GPipe: Efficient Training of Giant Neural Networks using Pipeline Parallelism](https://arxiv.org/abs/1811.06965)
+        - [ZeRO: Memory Optimizations Toward Training Trillion Parameter Models](https://arxiv.org/abs/1910.02054)
+        - [Efficient Large-Scale Language Model Training on GPU Clusters Using Megatron-LM](https://arxiv.org/abs/2104.04473)
+        
+        **Frameworks:**
+        - [DeepSpeed](https://github.com/microsoft/DeepSpeed)
+        - [Megatron-LM](https://github.com/NVIDIA/Megatron-LM)
+        - [PyTorch FSDP](https://pytorch.org/docs/stable/fsdp.html)
+        - [Alpa](https://github.com/alpa-projects/alpa)
+        """)
 
 # --- Sidebar Inputs ---
 st.sidebar.header("Configuration")
@@ -128,14 +505,26 @@ st.header("Simulation Results")
 
 # Create tabs for the application
 tab_summary, tab_params, tab_prefill, tab_decode, tab_viz, tab_arch, tab_model_viz, tab_parallel = st.tabs([
-    "📊 Summary", "⚙️ Model Parameters", "➡️ Prefill Stage", "🔄 Decode Stage",
+    "📊 Summary", "⚙️ Model Parameters", "➡️ Prefill Stage", "🔄 Decode Stage", 
     "📈 Visualizations", "🏛️ Model Structure", "🖼️ Model Visualization", "⚡ Parallelization"
 ])
 
 run_simulation = st.sidebar.button("Run Simulation")
 
+# Add content to the visualization and parallelization tabs regardless of simulation
+# This ensures they're already there when the user clicks on the tab
+with tab_model_viz:
+    show_model_viz_tab()
+
+with tab_parallel:
+    show_parallel_viz_tab()
+
 if run_simulation and config:
     try:
+        # Store config in session state
+        st.session_state.config = config
+        st.session_state.simulation_ran = True
+        
         # Instantiate calculator
         calc = LLMCalculator(
             num_layers=config["num_layers"],
@@ -149,44 +538,14 @@ if run_simulation and config:
         # Get full details
         details = calc.get_full_details(batch_size, sequence_length, num_tokens_to_generate)
         summary = details["summary"]
-
-        # Model Visualization Tab
-        with tab_model_viz:
-            st.subheader("Model Architecture Visualization")
-
-            # Create visualizations
-            visualizations = create_model_visualizations(config)
-
-            # Display the visualizations
-            st.subheader("Full Model Structure")
-            st.plotly_chart(visualizations["full_model"], use_container_width=True)
-
-            # Create a layer selector
-            selected_layer = st.slider("Select Layer for Detailed View",
-                                    min_value=1,
-                                    max_value=config["num_layers"],
-                                    value=1)
-
-            # Show layer details for the selected layer
-            visualizer = ModelVisualizer(config)
-            st.plotly_chart(visualizer.visualize_layer_details(selected_layer-1),
-                            use_container_width=True)
-
-            # Show the attention mechanism
-            st.subheader("Multi-Head Attention Visualization")
-            st.plotly_chart(visualizations["attention"], use_container_width=True)
-
-            # Add expander with explanation
-            with st.expander("About the Visualizations"):
-                st.markdown("""
-                These visualizations represent:
-                1. **Full Model Structure**: Shows all layers in the model from input to output.
-                2. **Layer Detail**: Displays the components within a transformer layer, including the attention mechanism and feed-forward network.
-                3. **Multi-Head Attention**: Illustrates how the attention mechanism works with multiple heads in parallel.
-
-                The visualizations are simplified representations and do not show all computational details.
-                """)
-
+        
+        # Store results in session state
+        st.session_state.simulation_results = {
+            "details": details,
+            "summary": summary,
+            "model_name": model_name
+        }
+        
         # Summary Tab
         with tab_summary:
             st.subheader(f"Input Configuration ({model_name})")
@@ -208,7 +567,7 @@ if run_simulation and config:
             display_breakdown("Parameter Memory", details["params"]["param_memory"], "bytes", "formula")
 
             col1.metric("Total Prefill FLOPs", f"{format_num(summary['prefill_flops'])} FLOPs")
-            display_flops_breakdown("Total Prefill FLOPs", details["prefill"]["flops"]) # Use new function
+            display_flops_breakdown("Total Prefill FLOPs", details["prefill"]["flops"])
 
             col2.metric(f"Total Decode FLOPs ({num_tokens_to_generate} tokens)", f"{format_num(summary['total_decode_flops'])} FLOPs")
             # Breakdown for total decode is complex, maybe show avg per token breakdown
@@ -260,7 +619,7 @@ if run_simulation and config:
         with tab_prefill:
             st.subheader("Prefill Stage Analysis")
             st.metric("Total FLOPs", f"{format_num(summary['prefill_flops'])} FLOPs")
-            display_flops_breakdown("Total Prefill FLOPs", details["prefill"]["flops"]) # Use new function
+            display_flops_breakdown("Total Prefill FLOPs", details["prefill"]["flops"])
 
             st.metric("Peak Activation Memory", f"{format_bytes(summary['peak_prefill_activation_gb'] * 1024**3)}")
             display_breakdown("Peak Prefill Activation Memory", details["prefill"]["activation_memory"], "bytes", "formula")
@@ -365,214 +724,8 @@ if run_simulation and config:
 
             **Key Inference Stages:**
             *   **Prefill:** Processes the entire input prompt (`sequence_length`) in parallel to generate the initial KV cache. Compute-intensive.
-            *   **Decode:** Generates output tokens one by one, using the KV cache from previous steps. Memory-bandwidth intensive.
+            *   **Decode:** Generates tokens one by one, using the KV cache from previous steps. Memory-bandwidth intensive.
             """)
-
-        # Model Visualization Tab content is already provided above
-
-        with tab_parallel:
-            st.subheader("LLM Parallelization Strategies")
-
-            st.markdown("""
-            This tab visualizes different parallelization strategies used for LLM inference and training.
-            Each strategy has different tradeoffs in terms of memory usage, computation, and communication overhead.
-            """)
-
-            # Add a selector for parallelism type
-            parallelism_type = st.selectbox(
-            "Select Parallelization Strategy",
-            ["batch", "data", "tensor", "pipeline", "zero", "hybrid"],
-            format_func=lambda x: {
-                "batch": "Batch Parallelism",
-                "data": "Data Parallelism",
-                "tensor": "Tensor Parallelism",
-                "pipeline": "Pipeline Parallelism",
-                "zero": "ZeRO (Zero Redundancy Optimizer)",
-                "hybrid": "Hybrid Parallelism"
-            }[x]
-            )
-
-            # Add parameter controls based on selected parallelism
-            col1, col2 = st.columns(2)
-
-            params = {}
-            if parallelism_type == "batch":
-                params["num_devices"] = col1.slider("Number of Devices", min_value=2, max_value=8, value=4)
-                params["batch_size"] = col2.slider("Total Batch Size", min_value=4, max_value=64, value=16, step=4)
-
-            elif parallelism_type == "data":
-                params["num_devices"] = col1.slider("Number of Devices", min_value=2, max_value=8, value=4)
-                params["batch_size"] = col2.slider("Total Batch Size", min_value=4, max_value=64, value=16, step=4)
-
-            elif parallelism_type == "tensor":
-                params["num_devices"] = col1.slider("Number of Devices", min_value=2, max_value=8, value=4)
-
-            elif parallelism_type == "pipeline":
-                params["num_devices"] = col1.slider("Number of Pipeline Stages", min_value=2, max_value=8, value=4)
-                params["pipeline_chunks"] = col2.slider("Number of Microbatches", min_value=1, max_value=8, value=4)
-
-            elif parallelism_type == "zero":
-                params["num_devices"] = col1.slider("Number of Devices", min_value=2, max_value=8, value=4)
-
-            elif parallelism_type == "hybrid":
-                params["num_pipeline_stages"] = col1.slider("Pipeline Stages", min_value=1, max_value=4, value=2)
-                params["num_tensor_parallel"] = col1.slider("Tensor Parallel Size", min_value=1, max_value=4, value=2)
-                params["num_data_parallel"] = col2.slider("Data Parallel Size", min_value=1, max_value=4, value=2)
-
-            # Display visualization based on the selected type
-            fig = create_parallelism_visualization(config, parallelism_type, **params)
-            st.plotly_chart(fig, use_container_width=True)
-
-            # Add explanations for each parallelism type
-            with st.expander("About This Parallelization Strategy"):
-                if parallelism_type == "batch":
-                    st.markdown("""
-                    **Batch Parallelism** is the simplest form of parallelism where a batch of inputs is divided among multiple devices.
-
-                    **How it works:**
-                    - The input batch is split into smaller batches
-                    - Each device processes its portion independently with a full copy of the model
-                    - No communication is needed during processing
-                    - Results are combined after processing
-
-                    **Benefits:**
-                    - Simple to implement
-                    - Linear scaling of throughput
-                    - No communication overhead during computation
-
-                    **Limitations:**
-                    - Each device needs a full copy of the model
-                    - Memory requirements don't decrease
-                    - Not suitable for models that don't fit on a single device
-                    """)
-
-                elif parallelism_type == "data":
-                    st.markdown("""
-                    **Data Parallelism** is a common approach for training where the model is replicated across devices, but each processes different data.
-
-                    **How it works:**
-                    - Full model copy exists on each device
-                    - Each device processes different samples (forward pass)
-                    - Gradients are synchronized across devices (backward pass)
-                    - Parameter updates are synchronized
-
-                    **Benefits:**
-                    - Simple to implement
-                    - Good scaling for computation
-                    - Works well when model fits on a single device
-
-                    **Limitations:**
-                    - Does not reduce per-device memory requirements
-                    - Communication overhead increases with model size
-                    - Not suitable for models larger than single device memory
-                    """)
-
-                elif parallelism_type == "tensor":
-                    st.markdown("""
-                    **Tensor Parallelism** (also known as horizontal parallelism) splits individual model operators across devices.
-
-                    **How it works:**
-                    - Mathematical operations in the model are partitioned
-                    - Common approach: Split attention heads across devices
-                    - Each device computes a portion of each layer's operations
-                    - Results are synchronized during computation
-
-                    **Benefits:**
-                    - Reduces memory requirements per device
-                    - Allows fitting larger models than single-device memory
-                    - Balanced computation across devices
-
-                    **Limitations:**
-                    - Requires significant communication during computation
-                    - May introduce performance bottlenecks from communication
-                    - More complex to implement
-
-                    *Common implementations: Megatron-LM, Mesh TensorFlow*
-                    """)
-
-                elif parallelism_type == "pipeline":
-                    st.markdown("""
-                    **Pipeline Parallelism** splits the model across devices layer-wise, creating a processing pipeline.
-
-                    **How it works:**
-                    - Model layers are divided among devices
-                    - Input is processed sequentially through the pipeline
-                    - Multiple inputs can be in different pipeline stages simultaneously
-                    - Microbatches are used to increase pipeline efficiency
-
-                    **Benefits:**
-                    - Reduces memory requirements per device
-                    - Can scale to very large models
-                    - Reduces activation memory requirements
-
-                    **Limitations:**
-                    - Pipeline bubbles cause inefficiency
-                    - Balancing computation across stages is challenging
-                    - May introduce latency for individual requests
-
-                    *Common implementations: GPipe, PipeDream*
-                    """)
-
-                elif parallelism_type == "zero":
-                    st.markdown("""
-                    **ZeRO (Zero Redundancy Optimizer)** shards optimizer states, gradients, and optionally parameters across devices.
-
-                    **How it works:**
-                    - ZeRO Stage 1: Optimizer states are partitioned
-                    - ZeRO Stage 2: Gradients are also partitioned
-                    - ZeRO Stage 3: Parameters are also partitioned
-                    - All-gather collectives bring necessary parameters to each device during computation
-
-                    **Benefits:**
-                    - Linear reduction in memory requirements with number of devices
-                    - Allows training models many times larger than single device memory
-                    - Maintains computational efficiency of data parallelism
-
-                    **Limitations:**
-                    - Increased communication volume
-                    - Communication may become bottleneck
-                    - Complex implementation
-
-                    *Implemented in: DeepSpeed, Megatron-DeepSpeed, PyTorch FSDP*
-                    """)
-
-                elif parallelism_type == "hybrid":
-                    st.markdown("""
-                    **Hybrid Parallelism** combines multiple parallelism strategies for maximum scalability.
-
-                    **How it works:**
-                    - Combines 2 or more parallelism strategies simultaneously
-                    - Common combination: 3D Parallelism (Data + Pipeline + Tensor)
-                    - Each strategy addresses different scaling challenges
-
-                    **Benefits:**
-                    - Can scale to extremely large models (trillions of parameters)
-                    - Better balance of computation vs. communication
-                    - Adaptable to different hardware configurations
-
-                    **Limitations:**
-                    - Very complex to implement and debug
-                    - Requires careful tuning for optimal performance
-                    - Requires sophisticated orchestration
-
-                    *Implemented in: Megatron-DeepSpeed, Microsoft's Turing-NLG/GPT, Google's PaLM architecture*
-                    """)
-
-            # Add additional resource links
-            with st.expander("Additional Resources"):
-                st.markdown("""
-                **Research Papers:**
-                - [Megatron-LM: Training Multi-Billion Parameter Language Models Using Model Parallelism](https://arxiv.org/abs/1909.08053)
-                - [GPipe: Efficient Training of Giant Neural Networks using Pipeline Parallelism](https://arxiv.org/abs/1811.06965)
-                - [ZeRO: Memory Optimizations Toward Training Trillion Parameter Models](https://arxiv.org/abs/1910.02054)
-                - [Efficient Large-Scale Language Model Training on GPU Clusters Using Megatron-LM](https://arxiv.org/abs/2104.04473)
-
-                **Frameworks:**
-                - [DeepSpeed](https://github.com/microsoft/DeepSpeed)
-                - [Megatron-LM](https://github.com/NVIDIA/Megatron-LM)
-                - [PyTorch FSDP](https://pytorch.org/docs/stable/fsdp.html)
-                - [Alpa](https://github.com/alpa-projects/alpa)
-                """)
 
     except Exception as e:
         st.error(f"An error occurred during calculation: {e}")
@@ -580,9 +733,6 @@ if run_simulation and config:
 
 elif run_simulation and not config:
     st.warning("Please configure model parameters manually or upload a config file before running the simulation.")
-
-else:
-    st.info("Adjust parameters in the sidebar and click 'Run Simulation'.")
 
 # Add footer
 st.markdown("---")

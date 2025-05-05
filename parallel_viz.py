@@ -32,27 +32,46 @@ class ParallelizationVisualizer:
     def _create_device_box(self, x0, y0, x1, y1, name="Device", device_id=None):
         """Create a box representing a computing device (GPU/TPU)."""
         text = f"{name} {device_id}" if device_id is not None else name
-        return dict(
+        shape = dict(
             type="rect",
             x0=x0, y0=y0, x1=x1, y1=y1,
             line=dict(color=self.colors['device_border'], width=2),
             fillcolor=self.colors['device'],
-            label=dict(text=text, font=dict(size=14, color=self.colors['text'])),
             layer="below"
         )
+        
+        annotation = dict(
+            x=(x0 + x1) / 2,
+            y=(y0 + y1) / 2,
+            text=text,
+            showarrow=False,
+            font=dict(size=14, color=self.colors['text'])
+        )
+        
+        return shape, annotation
     
     def _create_tensor_box(self, x0, y0, x1, y1, name="Tensor", color=None):
         """Create a box representing a tensor."""
         if color is None:
             color = self.colors['tensor']
-        return dict(
+        
+        shape = dict(
             type="rect",
             x0=x0, y0=y0, x1=x1, y1=y1,
             line=dict(color="rgba(0,0,0,0.5)", width=1),
             fillcolor=color,
-            label=dict(text=name, font=dict(size=12, color=self.colors['text'])),
             layer="above"
         )
+        
+        annotation = dict(
+            x=(x0 + x1) / 2,
+            y=(y0 + y1) / 2,
+            text=name,
+            showarrow=False,
+            font=dict(size=12, color=self.colors['text'])
+        )
+        
+        return shape, annotation
     
     def _create_arrow(self, x0, y0, x1, y1, color=None, width=2, dash=None):
         """Create an arrow representing data flow."""
@@ -96,14 +115,16 @@ class ParallelizationVisualizer:
         # Add devices
         for i in range(num_devices):
             x_center = (i + 0.5) * (device_width + device_spacing)
-            fig.add_shape(self._create_device_box(
+            device_shape, device_annotation = self._create_device_box(
                 x0=x_center - device_width/2,
                 y0=100,
                 x1=x_center + device_width/2,
                 y1=100 + device_height,
                 name="GPU",
                 device_id=i
-            ))
+            )
+            fig.add_shape(device_shape)
+            fig.add_annotation(device_annotation)
             
             # Add batch indicator
             fig.add_annotation(
@@ -115,17 +136,16 @@ class ParallelizationVisualizer:
             )
         
         # Add input data distribution visualization
-        fig.add_shape(
-            type="rect",
+        input_shape, input_annotation = self._create_tensor_box(
             x0=total_width/2 - 150,
             y0=20,
             x1=total_width/2 + 150,
             y1=70,
-            line=dict(color=self.colors['data'], width=2),
-            fillcolor=self.colors['data'],
-            label=dict(text=f"Input Batch (Size={batch_size})", font=dict(size=14, color=self.colors['text'])),
-            layer="above"
+            name=f"Input Batch (Size={batch_size})",
+            color=self.colors['data']
         )
+        fig.add_shape(input_shape)
+        fig.add_annotation(input_annotation)
         
         # Add arrows showing data distribution
         for i in range(num_devices):
@@ -219,26 +239,30 @@ class ParallelizationVisualizer:
             x_center = (i + 0.5) * (device_width + device_spacing)
             
             # Device box
-            fig.add_shape(self._create_device_box(
+            device_shape, device_annotation = self._create_device_box(
                 x0=x_center - device_width/2,
                 y0=100,
                 x1=x_center + device_width/2,
                 y1=100 + device_height,
                 name="GPU",
                 device_id=i
-            ))
+            )
+            fig.add_shape(device_shape)
+            fig.add_annotation(device_annotation)
             
             # Model representation inside device
             model_height = device_height * 0.8
             model_width = device_width * 0.8
-            fig.add_shape(self._create_tensor_box(
+            model_shape, model_annotation = self._create_tensor_box(
                 x0=x_center - model_width/2,
                 y0=100 + (device_height - model_height)/2,
                 x1=x_center + model_width/2,
                 y1=100 + (device_height - model_height)/2 + model_height,
                 name=f"Model Copy",
                 color=self.colors['compute']
-            ))
+            )
+            fig.add_shape(model_shape)
+            fig.add_annotation(model_annotation)
             
             # Add mini-batch indicator
             fig.add_annotation(
@@ -251,17 +275,16 @@ class ParallelizationVisualizer:
         
         # Add parameter synchronization visualization
         param_sync_y = 100 + device_height + 50
-        fig.add_shape(
-            type="rect",
+        sync_shape, sync_annotation = self._create_tensor_box(
             x0=total_width/2 - 200,
             y0=param_sync_y,
             x1=total_width/2 + 200,
             y1=param_sync_y + 40,
-            line=dict(color=self.colors['communication'], width=2),
-            fillcolor=self.colors['communication'],
-            label=dict(text="Parameter Synchronization", font=dict(size=14, color=self.colors['text'])),
-            layer="above"
+            name="Parameter Synchronization",
+            color=self.colors['communication']
         )
+        fig.add_shape(sync_shape)
+        fig.add_annotation(sync_annotation)
         
         # Add arrows for parameter synchronization
         for i in range(num_devices):
@@ -285,17 +308,16 @@ class ParallelizationVisualizer:
             ))
         
         # Add input data visualization
-        fig.add_shape(
-            type="rect",
+        input_shape, input_annotation = self._create_tensor_box(
             x0=total_width/2 - 200,
             y0=20,
             x1=total_width/2 + 200,
             y1=60,
-            line=dict(color=self.colors['data'], width=2),
-            fillcolor=self.colors['data'],
-            label=dict(text=f"Input Batch (Size={batch_size})", font=dict(size=14, color=self.colors['text'])),
-            layer="above"
+            name=f"Input Batch (Size={batch_size})",
+            color=self.colors['data']
         )
+        fig.add_shape(input_shape)
+        fig.add_annotation(input_annotation)
         
         # Add arrows for data distribution
         for i in range(num_devices):
@@ -351,53 +373,61 @@ class ParallelizationVisualizer:
             x_center = (i + 0.5) * (device_width + device_spacing)
             
             # Device box
-            fig.add_shape(self._create_device_box(
+            device_shape, device_annotation = self._create_device_box(
                 x0=x_center - device_width/2,
                 y0=100,
                 x1=x_center + device_width/2,
                 y1=100 + device_height,
                 name="GPU",
                 device_id=i
-            ))
+            )
+            fig.add_shape(device_shape)
+            fig.add_annotation(device_annotation)
             
             # Attention head partitioning (assume heads are evenly distributed)
             heads_per_device = self.num_attention_heads // num_devices
             
             # Add attention partition
             attn_y = 120
-            fig.add_shape(self._create_tensor_box(
+            attn_shape, attn_annotation = self._create_tensor_box(
                 x0=x_center - device_width * 0.4,
                 y0=attn_y,
                 x1=x_center + device_width * 0.4,
                 y1=attn_y + attn_height,
                 name=f"Attn Heads: {i*heads_per_device}-{(i+1)*heads_per_device-1}",
                 color="rgba(255, 161, 90, 0.7)"
-            ))
+            )
+            fig.add_shape(attn_shape)
+            fig.add_annotation(attn_annotation)
             
             # MLP partitioning (assume hidden dim is partitioned)
             mlp_partition_size = self.mlp_hidden_dim // num_devices
             mlp_y = attn_y + attn_height + layer_spacing
-            fig.add_shape(self._create_tensor_box(
+            mlp_shape, mlp_annotation = self._create_tensor_box(
                 x0=x_center - device_width * 0.4,
                 y0=mlp_y,
                 x1=x_center + device_width * 0.4,
                 y1=mlp_y + mlp_height,
                 name=f"MLP: {i*mlp_partition_size}-{(i+1)*mlp_partition_size-1}",
                 color="rgba(99, 110, 250, 0.7)"
-            ))
+            )
+            fig.add_shape(mlp_shape)
+            fig.add_annotation(mlp_annotation)
             
             # Output partition
             output_y = mlp_y + mlp_height + layer_spacing
             output_height = 40
             hidden_partition_size = self.hidden_size // num_devices
-            fig.add_shape(self._create_tensor_box(
+            output_shape, output_annotation = self._create_tensor_box(
                 x0=x_center - device_width * 0.4,
                 y0=output_y,
                 x1=x_center + device_width * 0.4,
                 y1=output_y + output_height,
                 name=f"Output: {i*hidden_partition_size}-{(i+1)*hidden_partition_size-1}",
                 color="rgba(0, 204, 150, 0.7)"
-            ))
+            )
+            fig.add_shape(output_shape)
+            fig.add_annotation(output_annotation)
         
         # Add communication arrows for cross-attention
         for i in range(num_devices):
@@ -420,17 +450,16 @@ class ParallelizationVisualizer:
         
         # Add communication arrows for final output reduction
         output_sync_y = 100 + device_height + 30
-        fig.add_shape(
-            type="rect",
+        sync_shape, sync_annotation = self._create_tensor_box(
             x0=total_width/2 - 120,
             y0=output_sync_y,
             x1=total_width/2 + 120,
             y1=output_sync_y + 30,
-            line=dict(color=self.colors['communication'], width=2),
-            fillcolor=self.colors['communication'],
-            label=dict(text="All-Reduce Operation", font=dict(size=12, color=self.colors['text'])),
-            layer="above"
+            name="All-Reduce Operation",
+            color=self.colors['communication']
         )
+        fig.add_shape(sync_shape)
+        fig.add_annotation(sync_annotation)
         
         # Connect devices to all-reduce
         output_y = mlp_y + mlp_height + layer_spacing + output_height/2
@@ -486,7 +515,7 @@ class ParallelizationVisualizer:
             x_center = (i + 0.5) * (device_width + device_spacing)
             
             # Device box
-            fig.add_shape(
+            device_shape = dict(
                 type="rect",
                 x0=x_center - device_width/2,
                 y0=100,
@@ -496,6 +525,7 @@ class ParallelizationVisualizer:
                 fillcolor=self.colors['device'],
                 layer="below"
             )
+            fig.add_shape(device_shape)
             
             # Device label
             fig.add_annotation(
@@ -679,77 +709,86 @@ class ParallelizationVisualizer:
             x_center = (i + 0.5) * (device_width + device_spacing)
             
             # Device box
-            fig.add_shape(self._create_device_box(
+            device_shape, device_annotation = self._create_device_box(
                 x0=x_center - device_width/2,
                 y0=100,
                 x1=x_center + device_width/2,
                 y1=100 + device_height,
                 name="GPU",
                 device_id=i
-            ))
+            )
+            fig.add_shape(device_shape)
+            fig.add_annotation(device_annotation)
             
             # Model representation (equivalent copy of FP16 parameters)
             model_height = 70
             model_y = 120
-            fig.add_shape(self._create_tensor_box(
+            model_shape, model_annotation = self._create_tensor_box(
                 x0=x_center - device_width * 0.4,
                 y0=model_y,
                 x1=x_center + device_width * 0.4,
                 y1=model_y + model_height,
                 name="Model (FP16)",
                 color="rgba(99, 110, 250, 0.7)"
-            ))
+            )
+            fig.add_shape(model_shape)
+            fig.add_annotation(model_annotation)
             
             # Optimizer shard
             opt_height = 40
             opt_y = model_y + model_height + 20
             parameter_shard_size = int(self.num_layers * 12 * self.hidden_size // num_devices)  # Approximate
-            fig.add_shape(self._create_tensor_box(
+            opt_shape, opt_annotation = self._create_tensor_box(
                 x0=x_center - device_width * 0.4,
                 y0=opt_y,
                 x1=x_center + device_width * 0.4,
                 y1=opt_y + opt_height,
                 name=f"Optimizer Shard {i+1}/{num_devices}",
                 color="rgba(239, 85, 59, 0.7)"
-            ))
+            )
+            fig.add_shape(opt_shape)
+            fig.add_annotation(opt_annotation)
             
             # Gradient shard
             grad_height = 40
             grad_y = opt_y + opt_height + 20
-            fig.add_shape(self._create_tensor_box(
+            grad_shape, grad_annotation = self._create_tensor_box(
                 x0=x_center - device_width * 0.4,
                 y0=grad_y,
                 x1=x_center + device_width * 0.4,
                 y1=grad_y + grad_height,
                 name=f"Gradient Shard {i+1}/{num_devices}",
                 color="rgba(0, 204, 150, 0.7)"
-            ))
+            )
+            fig.add_shape(grad_shape)
+            fig.add_annotation(grad_annotation)
             
             # Parameter shard (ZeRO-3)
             param_height = 40
             param_y = grad_y + grad_height + 20
-            fig.add_shape(self._create_tensor_box(
+            param_shape, param_annotation = self._create_tensor_box(
                 x0=x_center - device_width * 0.4,
                 y0=param_y,
                 x1=x_center + device_width * 0.4,
                 y1=param_y + param_height,
                 name=f"FP32 Param Shard {i+1}/{num_devices}",
                 color="rgba(171, 99, 250, 0.7)"
-            ))
+            )
+            fig.add_shape(param_shape)
+            fig.add_annotation(param_annotation)
         
         # Add communication visualization for all-gather and reduce-scatter
         comm_y = 100 + device_height + 40
-        fig.add_shape(
-            type="rect",
+        comm_shape, comm_annotation = self._create_tensor_box(
             x0=total_width/2 - 200,
             y0=comm_y,
             x1=total_width/2 + 200,
             y1=comm_y + 50,
-            line=dict(color=self.colors['communication'], width=2),
-            fillcolor=self.colors['communication'],
-            label=dict(text="All-Gather → Compute → Reduce-Scatter", font=dict(size=14, color=self.colors['text'])),
-            layer="above"
+            name="All-Gather → Compute → Reduce-Scatter",
+            color=self.colors['communication']
         )
+        fig.add_shape(comm_shape)
+        fig.add_annotation(comm_annotation)
         
         # Add arrows connecting devices to communication
         for i in range(num_devices):
@@ -850,14 +889,16 @@ class ParallelizationVisualizer:
                     
                     # Device box
                     device_id = dp * (num_pipeline_stages * num_tensor_parallel) + pp * num_tensor_parallel + tp
-                    fig.add_shape(self._create_device_box(
+                    device_shape, device_annotation = self._create_device_box(
                         x0=x_center - device_width/2,
                         y0=y_center - device_height/2,
                         x1=x_center + device_width/2,
                         y1=y_center + device_height/2,
                         name="GPU",
                         device_id=device_id
-                    ))
+                    )
+                    fig.add_shape(device_shape)
+                    fig.add_annotation(device_annotation)
                     
                     # Add device group labels
                     fig.add_annotation(

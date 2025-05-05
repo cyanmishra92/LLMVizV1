@@ -17,16 +17,26 @@ class ModelVisualizer:
         self.vocab_size = config.get("vocab_size", 30000)
         
     def _create_layer_node(self, x, y, layer_name, width=100, height=30, color='lightblue'):
-        """Helper to create a node for a single layer component."""
-        return dict(
+        """Helper to create a node for a single layer component. Returns both shape and annotation."""
+        # Create the shape (just the box, without any label)
+        shape = dict(
             type="rect",
             x0=x - width/2, y0=y - height/2,
             x1=x + width/2, y1=y + height/2,
             fillcolor=color,
             line=dict(color="black", width=2),
-            label=dict(text=layer_name, font=dict(size=10, color="black")),
             layer="below"
         )
+        
+        # Create a separate annotation for the text label
+        annotation = dict(
+            x=x, y=y,
+            text=layer_name,
+            showarrow=False,
+            font=dict(size=10, color="black")
+        )
+        
+        return shape, annotation
     
     def visualize_full_model(self):
         """Create a visualization of the entire model architecture."""
@@ -38,15 +48,21 @@ class ModelVisualizer:
         total_height = (self.num_layers + 2) * layer_spacing  # +2 for input and output layers
         
         # Add input embedding layer
-        fig.add_shape(self._create_layer_node(0, 0, "Input Embedding", width=150, color='lightgreen'))
+        shape, annotation = self._create_layer_node(0, 0, "Input Embedding", width=150, color='lightgreen')
+        fig.add_shape(shape)
+        fig.add_annotation(annotation)
         
         # Add transformer layers
         for i in range(self.num_layers):
             y_pos = (i + 1) * layer_spacing
-            fig.add_shape(self._create_layer_node(0, y_pos, f"Transformer Layer {i+1}", width=150, color='lightskyblue'))
+            shape, annotation = self._create_layer_node(0, y_pos, f"Transformer Layer {i+1}", width=150, color='lightskyblue')
+            fig.add_shape(shape)
+            fig.add_annotation(annotation)
         
         # Add output layer
-        fig.add_shape(self._create_layer_node(0, total_height - layer_spacing, "Output Layer", width=150, color='lightcoral'))
+        shape, annotation = self._create_layer_node(0, total_height - layer_spacing, "Output Layer", width=150, color='lightcoral')
+        fig.add_shape(shape)
+        fig.add_annotation(annotation)
         
         # Add connecting lines between layers
         for i in range(self.num_layers + 1):
@@ -100,10 +116,12 @@ class ModelVisualizer:
         
         # Add each component
         for comp in components:
-            fig.add_shape(self._create_layer_node(
+            shape, annotation = self._create_layer_node(
                 center_x, comp["y_pos"], comp["name"], 
                 width=comp["width"], color=comp["color"]
-            ))
+            )
+            fig.add_shape(shape)
+            fig.add_annotation(annotation)
             
             # Add attention details below the multi-head attention component
             if comp["name"] == "Multi-Head Attention":
@@ -185,10 +203,12 @@ class ModelVisualizer:
         output_x = 250
         
         # Input box
-        fig.add_shape(self._create_layer_node(
+        shape, annotation = self._create_layer_node(
             input_x, 0, f"Input\n({self.hidden_size})", 
             width=80, height=80, color='lightgreen'
-        ))
+        )
+        fig.add_shape(shape)
+        fig.add_annotation(annotation)
         
         # QKV projections
         qkv_y_positions = [-60, 0, 60]
@@ -196,10 +216,12 @@ class ModelVisualizer:
         qkv_colors = ["lightskyblue", "lightpink", "lightgreen"]
         
         for i, (label, y_pos, color) in enumerate(zip(qkv_labels, qkv_y_positions, qkv_colors)):
-            fig.add_shape(self._create_layer_node(
+            shape, annotation = self._create_layer_node(
                 qkv_x, y_pos, f"{label}\n({self.hidden_size})",
                 width=80, height=40, color=color
-            ))
+            )
+            fig.add_shape(shape)
+            fig.add_annotation(annotation)
             # Connect from input
             fig.add_shape(
                 type="line",
@@ -215,10 +237,12 @@ class ModelVisualizer:
         for i, y_pos in enumerate(head_y_positions):
             head_label = f"Head {i+1}\n({head_dim})" if i < num_heads_to_show - 1 else f"Head {i+1}\n+{self.num_attention_heads - num_heads_to_show} more" if self.num_attention_heads > num_heads_to_show else f"Head {i+1}\n({head_dim})"
             
-            fig.add_shape(self._create_layer_node(
+            shape, annotation = self._create_layer_node(
                 heads_x, y_pos, head_label,
                 width=70, height=30, color='lightsalmon'
-            ))
+            )
+            fig.add_shape(shape)
+            fig.add_annotation(annotation)
             
             # Connect from QKV
             for j, qkv_y in enumerate(qkv_y_positions):
@@ -230,10 +254,12 @@ class ModelVisualizer:
                 )
         
         # Output projection
-        fig.add_shape(self._create_layer_node(
+        shape, annotation = self._create_layer_node(
             output_x, 0, f"Output\n({self.hidden_size})",
             width=80, height=80, color='lightcoral'
-        ))
+        )
+        fig.add_shape(shape)
+        fig.add_annotation(annotation)
         
         # Connect from heads to output
         for y_pos in head_y_positions:
