@@ -1,9 +1,7 @@
 # model_viz.py
-import streamlit as st
 import plotly.graph_objects as go
 import plotly.express as px
 import numpy as np
-import math
 from typing import Dict, Any
 
 class ModelVisualizer:

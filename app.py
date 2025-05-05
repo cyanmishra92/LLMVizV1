@@ -5,11 +5,11 @@ import streamlit as st
 import json
 import pandas as pd
 import plotly.express as px
-# Assuming llm_calc.py is in the same directory
+# Import the core calculation logic
 from llm_calc import LLMCalculator, format_num, format_bytes
 import io
-# Import the new visualization module
-from model_viz import create_model_visualizations  # Import the helper function
+# Import the visualization module
+from model_viz import ModelVisualizer, create_model_visualizations
 
 # --- Page Config ---
 st.set_page_config(layout="wide", page_title="LLM Inference Simulator")
@@ -124,11 +124,16 @@ num_tokens_to_generate = st.sidebar.slider("Tokens to Generate (N_gen)", min_val
 # --- Main Area Output ---
 st.header("Simulation Results")
 
+# Create tabs
+tab_summary, tab_params, tab_prefill, tab_decode, tab_viz, tab_arch, tab_model_viz = st.tabs([
+    "📊 Summary", "⚙️ Model Parameters", "➡️ Prefill Stage", "🔄 Decode Stage", 
+    "📈 Visualizations", "🏛️ Model Structure", "🖼️ Model Visualization"
+])
+
 run_simulation = st.sidebar.button("Run Simulation")
 
 if run_simulation and config:
-
-
+    try:
         # Instantiate calculator
         calc = LLMCalculator(
             num_layers=config["num_layers"],
@@ -142,22 +147,12 @@ if run_simulation and config:
         # Get full details
         details = calc.get_full_details(batch_size, sequence_length, num_tokens_to_generate)
         summary = details["summary"]
-
-        # Display results (using tabs as designed)
-        # Add tabs for the new visualization
-        tab_summary, tab_params, tab_prefill, tab_decode, tab_viz, tab_arch, tab_model_viz = st.tabs([
-            "📊 Summary", "⚙️ Model Parameters", "➡️ Prefill Stage", "🔄 Decode Stage", 
-            "📈 Visualizations", "🏛️ Model Structure", "🖼️ Model Visualization"
-        ])
         
-    try:
-        # Your existing calculation code remains...
-        
-        # Add the following section for the new visualization tab
+        # Model Visualization Tab
         with tab_model_viz:
             st.subheader("Model Architecture Visualization")
             
-            # Create visualizations using the helper function
+            # Create visualizations
             visualizations = create_model_visualizations(config)
             
             # Display the visualizations
@@ -166,9 +161,9 @@ if run_simulation and config:
             
             # Create a layer selector
             selected_layer = st.slider("Select Layer for Detailed View", 
-                                       min_value=1, 
-                                       max_value=config["num_layers"], 
-                                       value=1)
+                                    min_value=1, 
+                                    max_value=config["num_layers"], 
+                                    value=1)
             
             # Show layer details for the selected layer
             visualizer = ModelVisualizer(config)
@@ -190,6 +185,7 @@ if run_simulation and config:
                 The visualizations are simplified representations and do not show all computational details.
                 """)
 
+        # Summary Tab
         with tab_summary:
             st.subheader(f"Input Configuration ({model_name})")
             st.json({
@@ -238,6 +234,7 @@ if run_simulation and config:
             peak_act_step_details = max(details["decode"]["per_token_calcs"], key=lambda x: x["activation_memory"]["gb"])["activation_memory"]
             display_breakdown("Peak Decode Activation Memory (per step)", peak_act_step_details, "bytes", "formula")
 
+        # Parameters Tab
         with tab_params:
             st.subheader("Parameter Breakdown")
             param_detail_list = []
@@ -257,6 +254,7 @@ if run_simulation and config:
             st.metric("Total Parameter Memory", f"{format_bytes(summary['param_memory_gb'] * 1024**3)}")
             display_breakdown("Total Parameter Memory", details["params"]["param_memory"], "bytes", "formula")
 
+        # Prefill Tab
         with tab_prefill:
             st.subheader("Prefill Stage Analysis")
             st.metric("Total FLOPs", f"{format_num(summary['prefill_flops'])} FLOPs")
@@ -270,6 +268,7 @@ if run_simulation and config:
 
             st.markdown("*(Prefill processes the input prompt in parallel. It's typically compute-bound due to large matrix multiplications.)*")
 
+        # Decode Tab
         with tab_decode:
             st.subheader("Decode Stage Analysis (Autoregressive Generation)")
             st.metric(f"Total FLOPs ({num_tokens_to_generate} tokens)", f"{format_num(summary['total_decode_flops'])} FLOPs")
@@ -285,6 +284,7 @@ if run_simulation and config:
 
             st.markdown("*(Decode generates tokens one by one. It's often memory-bandwidth bound due to loading weights and the growing KV cache.)*")
 
+        # Visualization Tab
         with tab_viz:
             st.subheader("Visualizations")
 
@@ -327,89 +327,3 @@ if run_simulation and config:
             })
             fig_dec_flops = px.line(decode_flops_df, x='Generated Tokens', y='Cumulative Decode TFLOPs', title='Cumulative Decode FLOPs During Generation', markers=True)
             st.plotly_chart(fig_dec_flops, use_container_width=True)
-
-        with tab_arch:
-            st.subheader("Assumed Model Structure (Decoder-Only Transformer)")
-            st.markdown("""
-            This simulator assumes a standard decoder-only transformer architecture, common in models like GPT, Llama, etc.
-            The key components and data flow are:
-
-            1.  **Input Embedding:** Input tokens (prompt) are converted into vectors of `hidden_size` (H).
-                *   Params: `vocab_size` (V) * `hidden_size` (H)
-
-            2.  **Transformer Blocks (repeated L times):**
-                *   **Layer Normalization:** Applied before attention and MLP layers (Pre-LN assumed).
-                *   **Multi-Head Self-Attention (MHA):**
-                    *   Input projected into Query (Q), Key (K), Value (V) matrices (`num_heads` times).
-                        *   Params (QKV Proj): 3 * H * H
-                    *   Attention scores calculated: `softmax(Q @ K.T / sqrt(head_dim)) @ V`.
-                        *   FLOPs (Prefill): ~ 4 * B * S^2 * H
-                        *   FLOPs (Decode): ~ 4 * B * S_total * H (per token)
-                    *   Output projection combines head outputs back to `hidden_size`.
-                        *   Params (Output Proj): H * H
-                *   **Residual Connection:** Output of attention added to its input.
-                *   **Layer Normalization:** Applied before the MLP layer.
-                *   **Feed-Forward Network (MLP):** Typically a 2 or 3-layer network (SwiGLU assumed here).
-                    *   Expands `hidden_size` to `mlp_hidden_dim` (M) and contracts back.
-                    *   Params (SwiGLU): 3 * H * M (Gate, Up, Down projections)
-                    *   FLOPs (Prefill): ~ 6 * B * S * H * M
-                    *   FLOPs (Decode): ~ 6 * B * H * M (per token)
-                *   **Residual Connection:** Output of MLP added to its input.
-
-            3.  **Final Layer Normalization:** Applied after the last transformer block.
-
-            4.  **Output Layer (Unembedding / LM Head):** Projects the final hidden state to `vocab_size` to get logits for the next token.
-                *   Params: H * V
-
-            **Key Inference Stages:**
-            *   **Prefill:** Processes the entire input prompt (`sequence_length`) in parallel to generate the initial KV cache. Compute-intensive.
-            *   **Decode:** Generates output tokens one by one, using the KV cache from previous steps. Memory-bandwidth intensive.
-            """)
-        
-        with tab_model_viz:
-            st.subheader("Model Architecture Visualization")
-            
-            # Create visualizations using the helper function
-            visualizations = create_model_visualizations(config)
-            
-            # Display the visualizations
-            st.subheader("Full Model Structure")
-            st.plotly_chart(visualizations["full_model"], use_container_width=True)
-            
-            # Create a layer selector
-            selected_layer = st.slider("Select Layer for Detailed View", 
-                                       min_value=1, 
-                                       max_value=config["num_layers"], 
-                                       value=1)
-            
-            # Show layer details for the selected layer
-            visualizer = ModelVisualizer(config)
-            st.plotly_chart(visualizer.visualize_layer_details(selected_layer-1), 
-                            use_container_width=True)
-            
-            # Show the attention mechanism
-            st.subheader("Multi-Head Attention Visualization")
-            st.plotly_chart(visualizations["attention"], use_container_width=True)
-            
-            # Add expander with explanation
-            with st.expander("About the Visualizations"):
-                st.markdown("""
-                These visualizations represent:
-                1. **Full Model Structure**: Shows all layers in the model from input to output.
-                2. **Layer Detail**: Displays the components within a transformer layer, including the attention mechanism and feed-forward network.
-                3. **Multi-Head Attention**: Illustrates how the attention mechanism works with multiple heads in parallel.
-                
-                The visualizations are simplified representations and do not show all computational details.
-                """)
-
-    except Exception as e:
-        st.error(f"An error occurred during calculation: {e}")
-        st.exception(e) # Show traceback for debugging
-
-elif run_simulation and not config:
-    st.warning("Please configure model parameters manually or upload a config file before running the simulation.")
-
-else:
-    st.info("Adjust parameters in the sidebar and click 'Run Simulation'.")
-
-
