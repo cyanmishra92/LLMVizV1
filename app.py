@@ -8,6 +8,8 @@ import plotly.express as px
 # Assuming llm_calc.py is in the same directory
 from llm_calc import LLMCalculator, format_num, format_bytes
 import io
+# Import the new visualization module
+from model_viz import create_model_visualizations  # Import the helper function
 
 # --- Page Config ---
 st.set_page_config(layout="wide", page_title="LLM Inference Simulator")
@@ -126,6 +128,45 @@ run_simulation = st.sidebar.button("Run Simulation")
 
 if run_simulation and config:
     try:
+        # Your existing calculation code remains...
+        
+        # Add the following section for the new visualization tab
+        with tab_model_viz:
+            st.subheader("Model Architecture Visualization")
+            
+            # Create visualizations using the helper function
+            visualizations = create_model_visualizations(config)
+            
+            # Display the visualizations
+            st.subheader("Full Model Structure")
+            st.plotly_chart(visualizations["full_model"], use_container_width=True)
+            
+            # Create a layer selector
+            selected_layer = st.slider("Select Layer for Detailed View", 
+                                       min_value=1, 
+                                       max_value=config["num_layers"], 
+                                       value=1)
+            
+            # Show layer details for the selected layer
+            visualizer = ModelVisualizer(config)
+            st.plotly_chart(visualizer.visualize_layer_details(selected_layer-1), 
+                            use_container_width=True)
+            
+            # Show the attention mechanism
+            st.subheader("Multi-Head Attention Visualization")
+            st.plotly_chart(visualizations["attention"], use_container_width=True)
+            
+            # Add expander with explanation
+            with st.expander("About the Visualizations"):
+                st.markdown("""
+                These visualizations represent:
+                1. **Full Model Structure**: Shows all layers in the model from input to output.
+                2. **Layer Detail**: Displays the components within a transformer layer, including the attention mechanism and feed-forward network.
+                3. **Multi-Head Attention**: Illustrates how the attention mechanism works with multiple heads in parallel.
+                
+                The visualizations are simplified representations and do not show all computational details.
+                """)
+
         # Instantiate calculator
         calc = LLMCalculator(
             num_layers=config["num_layers"],
@@ -141,8 +182,10 @@ if run_simulation and config:
         summary = details["summary"]
 
         # Display results (using tabs as designed)
-        tab_summary, tab_params, tab_prefill, tab_decode, tab_viz, tab_arch = st.tabs([
-            "📊 Summary", "⚙️ Model Parameters", "➡️ Prefill Stage", "🔄 Decode Stage", "📈 Visualizations", "🏛️ Model Structure"
+        # Add tabs for the new visualization
+        tab_summary, tab_params, tab_prefill, tab_decode, tab_viz, tab_arch, tab_model_viz = st.tabs([
+            "📊 Summary", "⚙️ Model Parameters", "➡️ Prefill Stage", "🔄 Decode Stage", 
+            "📈 Visualizations", "🏛️ Model Structure", "🖼️ Model Visualization"
         ])
 
         with tab_summary:
